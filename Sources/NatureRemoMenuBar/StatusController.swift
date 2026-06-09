@@ -11,11 +11,12 @@ final class StatusController: NSObject {
     private var devices: [RemoDevice] = []
     private var localStates: [String: AirconDisplayState] = [:]
     private let localStateDisplayDuration: TimeInterval = 20
-    private let automaticRefreshInterval: TimeInterval = 60
-    private let menuOpenRefreshMinimumInterval: TimeInterval = 5
+    private let automaticRefreshInterval: TimeInterval = 300
+    private let rateLimitCooldownInterval: TimeInterval = 600
     private var temperatureSliderViews: [TemperatureSliderView] = []
     private var refreshTimer: Timer?
     private var lastRefreshDate = Date.distantPast
+    private var nextAllowedRefreshDate = Date.distantPast
     private var isLoading = false
 
     init(client: NatureRemoClient, store: SettingsStore) {
@@ -90,7 +91,6 @@ final class StatusController: NSObject {
     }
 
     private func install(_ menu: NSMenu) {
-        menu.delegate = self
         statusItem.menu = menu
     }
 
@@ -277,6 +277,13 @@ final class StatusController: NSObject {
 
     private func refresh(status: String? = nil, clearLocalStates: Bool = false) async {
         guard !isLoading else { return }
+        guard Date() >= nextAllowedRefreshDate else {
+            if let status {
+                rebuildMenu(status: status)
+            }
+            return
+        }
+
         isLoading = true
         defer { isLoading = false }
 
@@ -291,11 +298,22 @@ final class StatusController: NSObject {
             appliances = try await fetchedAppliances
             devices = try await fetchedDevices
             lastRefreshDate = Date()
+            nextAllowedRefreshDate = .distantPast
             rebuildMenu(status: status)
         } catch {
-            statusItem.button?.title = "Remo"
-            rebuildMenu(status: error.localizedDescription)
+            handleRefreshError(error)
         }
+    }
+
+    private func handleRefreshError(_ error: Error) {
+        if case NatureRemoError.apiError(429, _) = error {
+            nextAllowedRefreshDate = Date().addingTimeInterval(rateLimitCooldownInterval)
+            rebuildMenu(status: "Nature Remo APIの制限中です。しばらく待ってください。")
+            return
+        }
+
+        statusItem.button?.title = "Remo"
+        rebuildMenu(status: error.localizedDescription)
     }
 
     private func formatTemperature(_ temperature: Double) -> String {
@@ -377,16 +395,6 @@ final class StatusController: NSObject {
 
     @objc private func quit() {
         NSApp.terminate(nil)
-    }
-}
-
-extension StatusController: NSMenuDelegate {
-    func menuWillOpen(_ menu: NSMenu) {
-        guard Date().timeIntervalSince(lastRefreshDate) >= menuOpenRefreshMinimumInterval else {
-            return
-        }
-
-        Task { await refresh(clearLocalStates: true) }
     }
 }
 
