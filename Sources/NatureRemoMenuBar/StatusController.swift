@@ -53,9 +53,6 @@ final class StatusController: NSObject {
             return
         }
 
-        addRoomTemperature(to: menu)
-        menu.addItem(.separator())
-
         if devices.isEmpty {
             let item = NSMenuItem(title: "Nature Remoが見つかりません", action: nil, keyEquivalent: "")
             item.isEnabled = false
@@ -71,6 +68,7 @@ final class StatusController: NSObject {
             let item = NSMenuItem(title: "エアコンが見つかりません", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
+            statusItem.button?.title = menuBarTitle()
         } else {
             addApplianceMenu(to: menu, aircons: aircons)
             menu.addItem(.separator())
@@ -94,30 +92,12 @@ final class StatusController: NSObject {
         menu.addItem(loginItem)
     }
 
-    private func addRoomTemperature(to menu: NSMenu) {
-        let selected = selectedDevice(from: devices)
-        let title: String
-
-        if let selected, let temperature = selected.roomTemperature {
-            title = "室温 \(formatTemperature(temperature))℃"
-        } else if selected != nil {
-            title = "室温 --℃"
-        } else {
-            title = "室温 未取得"
-        }
-
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        menu.addItem(item)
-    }
-
     private func addDeviceMenu(to menu: NSMenu, devices: [RemoDevice]) {
         let deviceMenu = NSMenu()
         let selectedID = selectedDevice(from: devices)?.id
 
         for device in devices {
-            let title = device.roomTemperature.map { "\(device.name) (\(formatTemperature($0))℃)" } ?? device.name
-            let item = NSMenuItem(title: title, action: #selector(selectDevice(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: device.name, action: #selector(selectDevice(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = device.id
             item.state = device.id == selectedID ? .on : .off
@@ -152,7 +132,7 @@ final class StatusController: NSObject {
         let displayState = currentDisplayState(for: appliance)
         let currentMode = displayState.mode
         let currentTemp = displayState.temperature
-        statusItem.button?.title = "\(modeShortTitle(currentMode)) \(currentTemp)℃ /\(displayState.powerTitle)"
+        statusItem.button?.title = menuBarTitle(displayState: displayState)
 
         let sliderView = TemperatureSliderView(
             temperatures: defaultTemperatures(for: appliance, mode: currentMode),
@@ -235,7 +215,10 @@ final class StatusController: NSObject {
         }
 
         let mode = OperationMode(rawValue: appliance.aircon?.settings?.mode ?? "") ?? .cool
-        let temperature = appliance.aircon?.settings?.temp ?? defaultTemperatures(for: appliance, mode: mode).first ?? "25"
+        let temperature = appliance.aircon?.settings?.temp
+            ?? store.lastTemperature(for: appliance.id)
+            ?? defaultTemperatures(for: appliance, mode: mode).first
+            ?? "25"
         let isOff = appliance.aircon?.settings?.button == "power-off"
         return AirconDisplayState(mode: mode, temperature: temperature, isOff: isOff, updatedAt: .distantPast)
     }
@@ -267,6 +250,7 @@ final class StatusController: NSObject {
         let mode = payload.mode ?? previous?.mode ?? fallbackState?.mode ?? .cool
         let temperature = payload.temperature ?? previous?.temperature ?? fallbackState?.temperature ?? "25"
         localStates[payload.applianceID] = AirconDisplayState(mode: mode, temperature: temperature, isOff: powerOff, updatedAt: Date())
+        store.saveLastTemperature(temperature, for: payload.applianceID)
     }
 
     private func refresh(status: String? = nil) async {
@@ -295,12 +279,19 @@ final class StatusController: NSObject {
         return String(format: "%.1f", temperature)
     }
 
-    private func modeShortTitle(_ mode: OperationMode) -> String {
-        switch mode {
-        case .cool: "冷"
-        case .dry: "ド"
-        case .warm: "暖"
+    private func menuBarTitle(displayState: AirconDisplayState? = nil) -> String {
+        let temperatureTitle: String
+        if let roomTemperature = selectedDevice(from: devices)?.roomTemperature {
+            temperatureTitle = "室温 \(formatTemperature(roomTemperature))℃"
+        } else {
+            temperatureTitle = "室温 --℃"
         }
+
+        guard let displayState else {
+            return temperatureTitle
+        }
+
+        return "\(temperatureTitle) /\(displayState.powerTitle)"
     }
 
     @objc private func refreshFromMenu() {

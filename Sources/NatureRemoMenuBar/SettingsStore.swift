@@ -6,6 +6,7 @@ final class SettingsStore {
     private let tokenAccount = "cloud-api-token"
     private let applianceKey = "selectedApplianceID"
     private let deviceKey = "selectedDeviceID"
+    private let lastTemperaturesKey = "lastTemperaturesByApplianceID"
 
     var selectedApplianceID: String? {
         get { UserDefaults.standard.string(forKey: applianceKey) }
@@ -15,6 +16,17 @@ final class SettingsStore {
     var selectedDeviceID: String? {
         get { UserDefaults.standard.string(forKey: deviceKey) }
         set { UserDefaults.standard.set(newValue, forKey: deviceKey) }
+    }
+
+    func lastTemperature(for applianceID: String) -> String? {
+        let temperatures = UserDefaults.standard.dictionary(forKey: lastTemperaturesKey) as? [String: String]
+        return temperatures?[applianceID]
+    }
+
+    func saveLastTemperature(_ temperature: String, for applianceID: String) {
+        var temperatures = UserDefaults.standard.dictionary(forKey: lastTemperaturesKey) as? [String: String] ?? [:]
+        temperatures[applianceID] = temperature
+        UserDefaults.standard.set(temperatures, forKey: lastTemperaturesKey)
     }
 
     func loadToken() -> String? {
