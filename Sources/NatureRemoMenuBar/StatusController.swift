@@ -11,7 +11,11 @@ final class StatusController: NSObject {
     private var devices: [RemoDevice] = []
     private var localStates: [String: AirconDisplayState] = [:]
     private let localStateDisplayDuration: TimeInterval = 20
+    private let automaticRefreshInterval: TimeInterval = 60
+    private let menuOpenRefreshMinimumInterval: TimeInterval = 5
     private var temperatureSliderViews: [TemperatureSliderView] = []
+    private var refreshTimer: Timer?
+    private var lastRefreshDate = Date.distantPast
     private var isLoading = false
 
     init(client: NatureRemoClient, store: SettingsStore) {
@@ -25,10 +29,13 @@ final class StatusController: NSObject {
         statusItem.button?.image = NSImage(systemSymbolName: "fan", accessibilityDescription: "Nature Remo")
         statusItem.button?.imagePosition = .imageLeading
         rebuildMenu(status: "読み込み中...")
-        Task { await refresh() }
+        startAutomaticRefresh()
+        Task { await refresh(clearLocalStates: true) }
     }
 
     func stop() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
@@ -49,7 +56,7 @@ final class StatusController: NSObject {
             addUtilityItems(to: menu)
             menu.addItem(.separator())
             menu.addItem("終了", action: #selector(quit), target: self, keyEquivalent: "q")
-            statusItem.menu = menu
+            install(menu)
             return
         }
 
@@ -79,7 +86,22 @@ final class StatusController: NSObject {
         addUtilityItems(to: menu)
         menu.addItem(.separator())
         menu.addItem("終了", action: #selector(quit), target: self, keyEquivalent: "q")
+        install(menu)
+    }
+
+    private func install(_ menu: NSMenu) {
+        menu.delegate = self
         statusItem.menu = menu
+    }
+
+    private func startAutomaticRefresh() {
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: automaticRefreshInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.refresh(clearLocalStates: true)
+            }
+        }
     }
 
     private func addUtilityItems(to menu: NSMenu) {
@@ -253,10 +275,14 @@ final class StatusController: NSObject {
         store.saveLastTemperature(temperature, for: payload.applianceID)
     }
 
-    private func refresh(status: String? = nil) async {
+    private func refresh(status: String? = nil, clearLocalStates: Bool = false) async {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
+
+        if clearLocalStates {
+            localStates.removeAll()
+        }
 
         do {
             let token = try token()
@@ -264,6 +290,7 @@ final class StatusController: NSObject {
             async let fetchedDevices = client.devices(token: token)
             appliances = try await fetchedAppliances
             devices = try await fetchedDevices
+            lastRefreshDate = Date()
             rebuildMenu(status: status)
         } catch {
             statusItem.button?.title = "Remo"
@@ -295,9 +322,8 @@ final class StatusController: NSObject {
     }
 
     @objc private func refreshFromMenu() {
-        localStates.removeAll()
         rebuildMenu(status: "読み込み中...")
-        Task { await refresh() }
+        Task { await refresh(clearLocalStates: true) }
     }
 
     @objc private func selectAppliance(_ sender: NSMenuItem) {
@@ -351,6 +377,16 @@ final class StatusController: NSObject {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+}
+
+extension StatusController: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        guard Date().timeIntervalSince(lastRefreshDate) >= menuOpenRefreshMinimumInterval else {
+            return
+        }
+
+        Task { await refresh(clearLocalStates: true) }
     }
 }
 

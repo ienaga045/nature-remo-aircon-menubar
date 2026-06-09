@@ -26,6 +26,7 @@ macOSメニューバーからNature Remoのエアコンを操作するアプリ
 - 複数Nature Remoがある場合の室温表示対象の選択
 - ログイン時の自動起動
 - Nature Remo Cloud APIトークンのKeychain保存
+- 60秒ごとの自動更新と、メニューを開いた時の状態再取得
 
 ## 使い方
 
