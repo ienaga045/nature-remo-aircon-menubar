@@ -26,8 +26,6 @@ final class StatusController: NSObject {
     }
 
     func start() {
-        statusItem.button?.title = "Remo"
-        statusItem.button?.image = NSImage(systemSymbolName: "fan", accessibilityDescription: "Nature Remo")
         statusItem.button?.imagePosition = .imageLeading
         rebuildMenu(status: "読み込み中...")
         startAutomaticRefresh()
@@ -52,6 +50,7 @@ final class StatusController: NSObject {
         }
 
         if store.loadToken() == nil {
+            updateMenuBarButton(title: "Remo")
             menu.addItem("APIトークンを設定...", action: #selector(openPreferences), target: self, keyEquivalent: ",")
             menu.addItem(.separator())
             addUtilityItems(to: menu)
@@ -76,7 +75,7 @@ final class StatusController: NSObject {
             let item = NSMenuItem(title: "エアコンが見つかりません", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
-            statusItem.button?.title = menuBarTitle()
+            updateMenuBarButton(title: menuBarTitle())
         } else {
             addApplianceMenu(to: menu, aircons: aircons)
             menu.addItem(.separator())
@@ -154,7 +153,7 @@ final class StatusController: NSObject {
         let displayState = currentDisplayState(for: appliance)
         let currentMode = displayState.mode
         let currentTemp = displayState.temperature
-        statusItem.button?.title = menuBarTitle(displayState: displayState)
+        updateMenuBarButton(title: menuBarTitle(displayState: displayState), mode: currentMode)
 
         let sliderView = TemperatureSliderView(
             temperatures: defaultTemperatures(for: appliance, mode: currentMode),
@@ -236,7 +235,7 @@ final class StatusController: NSObject {
             localStates.removeValue(forKey: appliance.id)
         }
 
-        let mode = OperationMode(rawValue: appliance.aircon?.settings?.mode ?? "") ?? .cool
+        let mode = store.lastMode(for: appliance.id) ?? reportedMode(for: appliance) ?? .cool
         let temperature = appliance.aircon?.settings?.temp
             ?? store.lastTemperature(for: appliance.id)
             ?? defaultTemperatures(for: appliance, mode: mode).first
@@ -245,7 +244,15 @@ final class StatusController: NSObject {
         return AirconDisplayState(mode: mode, temperature: temperature, isOff: isOff, updatedAt: .distantPast)
     }
 
-    private func send(_ payload: ControlPayload, powerOff: Bool = false) {
+    private func reportedMode(for appliance: Appliance) -> OperationMode? {
+        appliance.aircon?.settings?.mode.flatMap(OperationMode.init(rawValue:))
+    }
+
+    private func send(_ payload: ControlPayload, powerOff: Bool = false, rememberMode: Bool = false) {
+        let modeToSave = rememberMode ? payload.mode : nil
+        let modeBeforeOff = powerOff && store.lastMode(for: payload.applianceID) == nil
+            ? appliances.first { $0.id == payload.applianceID }.flatMap(reportedMode(for:))
+            : nil
         rebuildMenu(status: "送信中...")
         Task {
             do {
@@ -257,6 +264,11 @@ final class StatusController: NSObject {
                     mode: powerOff ? nil : payload.mode,
                     temperature: powerOff ? nil : payload.temperature
                 )
+                if let mode = modeToSave {
+                    store.saveLastMode(mode, for: payload.applianceID)
+                } else if let mode = modeBeforeOff, store.lastMode(for: payload.applianceID) == nil {
+                    store.saveLastMode(mode, for: payload.applianceID)
+                }
                 applyLocalState(payload, powerOff: powerOff)
                 rebuildMenu(status: "送信しました")
             } catch {
@@ -312,7 +324,6 @@ final class StatusController: NSObject {
             return
         }
 
-        statusItem.button?.title = "Remo"
         rebuildMenu(status: error.localizedDescription)
     }
 
@@ -322,6 +333,17 @@ final class StatusController: NSObject {
         }
 
         return String(format: "%.1f", temperature)
+    }
+
+    private func updateMenuBarButton(title: String, mode: OperationMode? = nil) {
+        let symbol = switch mode {
+        case .cool: "snowflake"
+        case .warm: "sun.max"
+        case .dry: "drop"
+        case nil: "fan"
+        }
+        statusItem.button?.title = title
+        statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: mode?.title ?? "Nature Remo")
     }
 
     private func menuBarTitle(displayState: AirconDisplayState? = nil) -> String {
@@ -366,7 +388,7 @@ final class StatusController: NSObject {
 
     @objc private func setMode(_ sender: NSMenuItem) {
         guard let payload = sender.representedObject as? ControlPayload else { return }
-        send(payload)
+        send(payload, rememberMode: true)
     }
 
     @objc private func setTemperature(_ sender: NSMenuItem) {

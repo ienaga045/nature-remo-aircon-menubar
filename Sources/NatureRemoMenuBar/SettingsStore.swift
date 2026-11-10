@@ -7,6 +7,7 @@ final class SettingsStore {
     private let applianceKey = "selectedApplianceID"
     private let deviceKey = "selectedDeviceID"
     private let lastTemperaturesKey = "lastTemperaturesByApplianceID"
+    private let lastModesKey = "lastModesByApplianceID"
 
     var selectedApplianceID: String? {
         get { UserDefaults.standard.string(forKey: applianceKey) }
@@ -27,6 +28,17 @@ final class SettingsStore {
         var temperatures = UserDefaults.standard.dictionary(forKey: lastTemperaturesKey) as? [String: String] ?? [:]
         temperatures[applianceID] = temperature
         UserDefaults.standard.set(temperatures, forKey: lastTemperaturesKey)
+    }
+
+    func lastMode(for applianceID: String) -> OperationMode? {
+        let modes = UserDefaults.standard.dictionary(forKey: lastModesKey) as? [String: String]
+        return modes?[applianceID].flatMap(OperationMode.init(rawValue:))
+    }
+
+    func saveLastMode(_ mode: OperationMode, for applianceID: String) {
+        var modes = UserDefaults.standard.dictionary(forKey: lastModesKey) as? [String: String] ?? [:]
+        modes[applianceID] = mode.rawValue
+        UserDefaults.standard.set(modes, forKey: lastModesKey)
     }
 
     func loadToken() -> String? {
